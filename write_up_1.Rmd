@@ -1,0 +1,256 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# metapopultion daynmic
+
+## gettin the data
+
+```{r, setup, include=FALSE}
+
+knitr::opts_knit$set(root.dir = '/Users/yuval/Downloads')
+```
+
+```{r}
+data <- read.csv('write_up_1_data.csv')
+library(ggplot2)
+```
+
+## immigration and extinction
+
+for each island I want to calculate it immigration rate and extinction rate for that I will calclate the avarge length of time from extinction to imigration (imigration rate) and from imigration to extinction (extinction rate)
+
+```{r}
+# Load necessary library
+library(dplyr)
+
+# Convert columns x1 to x30 to binary data
+data <- data %>%
+  mutate(across(X1:X30, ~ ifelse(. > 0, 1, 0)))
+
+# Function to calculate the mean length of continuous sets of 1s
+mean_length_continuous_ones <- function(row ,value) {
+  values <- as.numeric(row)
+  rle_values <- rle(values)
+  lengths_ones <- rle_values$lengths[rle_values$values == value]
+  if (length(lengths_ones) > 0) {
+    return(mean(lengths_ones))
+  } else {
+    return(NA)
+  }
+}
+
+# Apply the function to each row and add the result as a new column
+data1 <- data %>%
+  rowwise() %>% 
+  mutate(extinction_rate = 1/ mean_length_continuous_ones(c_across(X1:X30) ,1) , colnilzation_rate =  1/ mean_length_continuous_ones(c_across(X1:X30) ,0)) %>%
+  ungroup()
+
+# Display the modified data fram
+meta_comunity <-  select(data1 ,island, size, extinction_rate, colnilzation_rate)
+meta_comunity
+```
+
+## connction between island size and birth rate
+
+```{r}
+model_birth <- glm(birth.rate ~ size, data = data, family = Gamma(link = "log"))
+summary(model_birth)
+```
+
+```{r}
+model_death  <- glm(death.rate ~ size, data = data, family = Gamma(link = "log"))
+summary(model_death)
+```
+
+```{r}
+ggplot(data, aes(x = size)) +
+  geom_point(aes(y = birth.rate), color = "blue") +
+  geom_point(aes(y = death.rate), color = "red") +
+  geom_smooth(aes(y = birth.rate), method = "lm", color = "blue") +
+  geom_smooth(aes(y = death.rate), method = "lm", color = "red") +
+  labs(x = "Size", y = "Rate", title = "Effect of Size on Extinction and Colonization Rates")
+```
+
+## connection between size and extinction rate
+
+```{r}
+library(ggplot2)
+png(file="size_effect.png",width=600, height=350)
+ggplot(meta_comunity, aes(x = size)) +
+  geom_point(aes(y = extinction_rate), color = "blue") +
+  geom_point(aes(y = colnilzation_rate), color = "red") +
+  geom_smooth(aes(y = extinction_rate), method = "lm", color = "blue") +
+  geom_smooth(aes(y = colnilzation_rate), method = "lm", color = "red") +
+  labs(x = "Size", y = "Rate", title = "Effect of Size on Extinction and Colonization Rates")
+dev.off()
+```
+
+```{r}
+
+```
+
+now to explore the connection between colonilizatoin / extinction probabitly and patch_ocipancy
+
+```{r}
+# Load necessary library
+library(dplyr)
+
+# Function to create new columns D1 to D29 based on the given conditions
+
+create_new_columns <- function(df) {
+  for (i in 2:30) {
+    df <- df %>%
+      mutate(!!paste0("X", i-1) := case_when(
+        get(paste0("X", i)) == 0 & get(paste0("X", i-1)) == 1 ~ "ext",
+        get(paste0("X", i)) == 1 & get(paste0("X", i-1)) == 0 ~ "col",
+        get(paste0("X", i)) == 0 & get(paste0("X", i-1)) == 0 ~ "non",
+        get(paste0("X", i)) == 1 & get(paste0("X", i-1)) == 1 ~ "stay",
+        TRUE ~ NA_character_
+      ))
+  }
+  return(df)
+}
+# Apply the function to the df data frame
+df_new <- create_new_columns(data)  %>% 
+  select(island, size, birth.rate, death.rate, starts_with("X"))
+
+# Display the new data frame
+print(df_new)
+write.csv(df_new, "newdata.csv", row.names=FALSE)
+
+```
+
+```{r}
+library(tidyr)
+library(dplyr)
+
+# Assuming df is already loaded in your environment
+df_long <- df_new  %>%
+  select(-birth.rate, -death.rate ,-X30) %>%
+  pivot_longer(cols = starts_with("X"),
+               names_to = "category",
+               values_to = "status")
+
+# Display the first few rows of the transformed data frame
+head(df_long)
+```
+
+```{r}
+df_sum <- data %>%
+  select(starts_with("X")) %>%
+  summarise(across(everything(), ~ sum(. == 1, na.rm = TRUE))) %>%
+  pivot_longer(cols = everything(),
+               names_to = "category",
+               values_to = "path_ocopncy") %>% filter(category != "X30") %>% mutate(path_ocopncy = path_ocopncy /12)
+
+# Display the new data frame
+full <- merge(df_sum ,  df_long , by ="category" )
+```
+
+```{r}
+colnization_data <- full %>% filter(status == "non" | status == "col") %>% mutate(status_index = case_when(status == "col" ~1 , TRUE~0))
+conization_model <- glm(status_index ~ path_ocopncy + size, 
+                        data = colnization_data, 
+                        family = binomial(link = "logit"))
+
+# Display the summary of the model
+summary(conization_model)
+```
+
+```{r}
+extinction_data <- full %>% filter(status == "stay" | status == "ext") %>% mutate(status_index = case_when(status == "ext" ~1 , TRUE~0))
+extinction_model <- glm(status_index ~ path_ocopncy + size, 
+                        data = extinction_data, 
+                        family = binomial(link = "logit"))
+
+# Display the summary of the model
+summary(extinction_model)
+```
+
+```{r}
+meta_comunity
+```
+
+```{r warning=FALSE}
+create_whgith_list <- function(Simulation){
+  whight <- c()
+  for (i in 1:nrow(Simulation)) {
+    if (Simulation$current[i] == 1) {
+      whight <- c(whight, Simulation$extinction_rate[i])
+  } else {
+      whight <- c(whight, Simulation$colonization_rate[i])
+  }
+  }
+  return(whight)
+
+}
+
+step <- function(Simulation ,time){
+  weights = create_whgith_list(Simulation)
+  d_time <- rexp(1, rate = sum(weights))
+  random_number <- sample(1:length(weights), 1, prob=weights)[1]
+  Simulation$current[random_number] <- 1- Simulation$current[random_number]
+  
+  return(list(Simulation = Simulation , time = time + d_time) )
+}
+record <- data.frame(time = 0, sum = 8)
+Simulation <- mutate(meta_comunity , current = 1 ) 
+time = 0
+for (i in 1:1000) {
+  sim <-step(Simulation ,time)
+  Simulation = sim$Simulation
+  time = sim$time
+  new_row <- data.frame(time = time, sum = sum(Simulation$current))
+  record <- rbind(record, new_row)
+  if (sum(Simulation$current) <1 |  time > 300){
+    print("end")
+    break
+  }
+}
+stable_record <- filter(record , time >100)
+png(file="Simulation.png",width=600, height=350)
+
+ ggplot(record, aes(x = time, y = sum/12)) +
+  geom_line(color = "red") +
+  labs(title = "Change of island ocupncy Over Time",
+       x = "Time",
+       y = "patch ocupncy") +
+  theme_minimal()+ geom_hline(yintercept=0 ) +geom_hline(yintercept= mean(stable_record$sum/12),color = "blue")
+ dev.off()
+```
+
+```{r}
+mean(meta_comunity$extinction_rate)
+mean(meta_comunity$colnilzation_rate)
+
+mean(meta_comunity$colnilzation_rate) /mean(meta_comunity$extinction_rate) 
+```
+
+```{r}
+library("dplyr") 
+
+data2 <- data %>% select(-island , -size , -birth.rate ,-death.rate) 
+  sum(data2)/(30*12)
+
+```
+
+```{r}
+# Summing columns x1 to x30 into a new data frame
+# Summing each column x1 to x30 separately
+sum_each_column <- colSums(data[, paste0("X", 1:30)])
+sum_df <- data.frame(index = 1:length(sum_each_column), column = names(sum_each_column), sum = sum_each_column)
+
+# Display the sums of each column
+ ggplot(sum_df, aes(x = index, y = sum )) +
+  geom_line() +
+  labs(title = "Change of island ocupncy Over Time",
+       x = "Time",
+       y = "patch ocupncy") +
+  theme_minimal()+ geom_hline(yintercept=0) +geom_hline(yintercept= mean(sum_df$sum))
+```
+
+```{r}
+data
+```
